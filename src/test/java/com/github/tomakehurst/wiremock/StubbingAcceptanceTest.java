@@ -19,23 +19,34 @@ import com.github.tomakehurst.wiremock.http.Fault;
 import com.github.tomakehurst.wiremock.stubbing.ListStubMappingsResult;
 import com.github.tomakehurst.wiremock.stubbing.StubMapping;
 import com.github.tomakehurst.wiremock.testsupport.WireMockResponse;
+import org.apache.http.HttpEntity;
 import org.apache.http.MalformedChunkCodingException;
 import org.apache.http.NoHttpResponseException;
 import org.apache.http.client.ClientProtocolException;
+import org.apache.http.entity.ContentType;
+import org.apache.http.entity.StringEntity;
+import org.junit.BeforeClass;
 import org.junit.Test;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
-import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
 import static com.github.tomakehurst.wiremock.http.RequestMethod.GET;
 import static com.github.tomakehurst.wiremock.http.RequestMethod.POST;
 import static com.github.tomakehurst.wiremock.testsupport.TestHttpHeader.withHeader;
 import static java.net.HttpURLConnection.HTTP_NOT_FOUND;
 import static java.net.HttpURLConnection.HTTP_OK;
-import static org.hamcrest.Matchers.*;
+import static org.apache.http.entity.ContentType.APPLICATION_XML;
+import static org.hamcrest.Matchers.greaterThanOrEqualTo;
+import static org.hamcrest.Matchers.instanceOf;
+import static org.hamcrest.Matchers.is;
 import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
 
 public class StubbingAcceptanceTest extends AcceptanceTestBase {
+
+	@BeforeClass
+	public static void setupServer() {
+		setupServerWithMappingsInFileRoot();
+	}
 
 	@Test
 	public void mappingWithExactUrlAndMethodMatch() {
@@ -89,9 +100,9 @@ public class StubbingAcceptanceTest extends AcceptanceTestBase {
 			.willReturn(aResponse().withStatus(204)));
 
 		WireMockResponse response = testClient.put("/case/insensitive",
-				withHeader("one", "abcd1234"),
-				withHeader("TWO", "thing"),
-				withHeader("tHrEe", "something"));
+			withHeader("one", "abcd1234"),
+			withHeader("TWO", "thing"),
+			withHeader("tHrEe", "something"));
 
 		assertThat(response.statusCode(), is(204));
 	}
@@ -113,8 +124,8 @@ public class StubbingAcceptanceTest extends AcceptanceTestBase {
                 .willReturn(aResponse().withStatus(200)));
 
         WireMockResponse response = testClient.get("/some/extra/header",
-                withHeader("ExpectedHeader", "expected-value"),
-                withHeader("UnexpectedHeader", "unexpected-value"));
+			withHeader("ExpectedHeader", "expected-value"),
+			withHeader("UnexpectedHeader", "unexpected-value"));
 
         assertThat(response.statusCode(), is(200));
     }
@@ -130,6 +141,20 @@ public class StubbingAcceptanceTest extends AcceptanceTestBase {
     }
 
 	@Test
+	public void doesNotMatchOnUrlPathWhenExtraPathElementsPresent() {
+		stubFor(get(urlPathEqualTo("/matching-path")).willReturn(aResponse().withStatus(200)));
+
+		assertThat(testClient.get("/matching-path/extra").statusCode(), is(404));
+	}
+
+	@Test
+	public void doesNotMatchOnUrlPathWhenPathShorter() {
+	    stubFor(get(urlPathEqualTo("/matching-path")).willReturn(aResponse().withStatus(200)));
+
+	    assertThat(testClient.get("/matching").statusCode(), is(404));
+	}
+
+	@Test
 	public void matchesOnUrlPathPatternAndQueryParameters() {
 		stubFor(get(urlPathMatching("/path(.*)/match"))
 				.withQueryParam("search", containing("WireMock"))
@@ -137,6 +162,20 @@ public class StubbingAcceptanceTest extends AcceptanceTestBase {
 				.willReturn(aResponse().withStatus(200)));
 
 		assertThat(testClient.get("/path-and-query/match?since=2014-10-14&search=WireMock%20stubbing").statusCode(), is(200));
+	}
+
+	@Test
+	public void doesNotMatchOnUrlPathPatternWhenPathShorter() {
+	    stubFor(get(urlPathMatching("/matching-path")).willReturn(aResponse().withStatus(200)));
+
+	    assertThat(testClient.get("/matching").statusCode(), is(404));
+	}
+
+	@Test
+	public void doesNotMatchOnUrlPathPatternWhenExtraPathPresent() {
+	    stubFor(get(urlPathMatching("/matching-path")).willReturn(aResponse().withStatus(200)));
+
+	    assertThat(testClient.get("/matching-path/extra").statusCode(), is(404));
 	}
 
 	@Test
@@ -149,9 +188,27 @@ public class StubbingAcceptanceTest extends AcceptanceTestBase {
 	}
 
     @Test
+    public void doesNotMatchIfSpecifiedAbsentQueryParameterIsPresentInRequest() {
+        stubFor(get(urlPathEqualTo("/path-and-query/match"))
+            .withQueryParam("search", absent())
+            .willReturn(aResponse().withStatus(200)));
+
+        assertThat(testClient.get("/path-and-query/match?search=presentwhoops").statusCode(), is(404));
+    }
+
+    @Test
+    public void matchesIfSpecifiedAbsentQueryParameterIsAbsentFromRequest() {
+        stubFor(get(urlPathEqualTo("/path-and-query/match"))
+            .withQueryParam("search", absent())
+            .willReturn(aResponse().withStatus(200)));
+
+        assertThat(testClient.get("/path-and-query/match?anotherparam=present").statusCode(), is(200));
+    }
+
+    @Test
 	public void responseBodyLoadedFromFile() {
 		stubFor(get(urlEqualTo("/my/file")).willReturn(
-				aResponse()
+			aResponse()
 				.withStatus(200)
 				.withBodyFile("plain-example.txt")));
 
@@ -212,10 +269,10 @@ public class StubbingAcceptanceTest extends AcceptanceTestBase {
 	@Test
 	public void responseWithFixedDelay() {
 	    stubFor(get(urlEqualTo("/delayed/resource")).willReturn(
-                aResponse()
-                .withStatus(200)
-                .withBody("Content")
-                .withFixedDelay(500)));
+			aResponse()
+				.withStatus(200)
+				.withBody("Content")
+				.withFixedDelay(500)));
 
 	    long start = System.currentTimeMillis();
         testClient.get("/delayed/resource");
@@ -225,10 +282,40 @@ public class StubbingAcceptanceTest extends AcceptanceTestBase {
 	}
 
 	@Test
+    public void responseWithLogNormalDistributedDelay() {
+        stubFor(get(urlEqualTo("/lognormal/delayed/resource")).willReturn(
+			aResponse()
+				.withStatus(200)
+				.withBody("Content")
+				.withLogNormalRandomDelay(90, 0.1)));
+
+        long start = System.currentTimeMillis();
+        testClient.get("/lognormal/delayed/resource");
+        int duration = (int) (System.currentTimeMillis() - start);
+
+        assertThat(duration, greaterThanOrEqualTo(60));
+    }
+
+	@Test
+	public void responseWithUniformDistributedDelay() {
+		stubFor(get(urlEqualTo("/uniform/delayed/resource")).willReturn(
+			aResponse()
+				.withStatus(200)
+				.withBody("Content")
+				.withUniformRandomDelay(50, 60)));
+
+		long start = System.currentTimeMillis();
+		testClient.get("/uniform/delayed/resource");
+		int duration = (int) (System.currentTimeMillis() - start);
+
+		assertThat(duration, greaterThanOrEqualTo(50));
+	}
+
+	@Test
 	public void highPriorityMappingMatchedFirst() {
 		stubFor(get(urlMatching("/priority/.*")).atPriority(10)
 				.willReturn(aResponse()
-                .withStatus(500)));
+						.withStatus(500)));
 		stubFor(get(urlEqualTo("/priority/resource")).atPriority(2).willReturn(aResponse().withStatus(200)));
 
 		assertThat(testClient.get("/priority/resource").statusCode(), is(200));
@@ -302,7 +389,7 @@ public class StubbingAcceptanceTest extends AcceptanceTestBase {
     @Test
     public void stubbingPatch() {
         stubFor(patch(urlEqualTo("/a/registered/resource")).withRequestBody(equalTo("some body"))
-                .willReturn(aResponse().withStatus(204)));
+				.willReturn(aResponse().withStatus(204)));
 
         WireMockResponse response = testClient.patchWithBody("/a/registered/resource", "some body", "text/plain");
 
@@ -318,6 +405,48 @@ public class StubbingAcceptanceTest extends AcceptanceTestBase {
 
 		assertThat(response.statusCode(), is(204));
 	}
+
+	@Test
+	public void settingStatusMessage() {
+		stubFor(get(urlEqualTo("/status-message")).willReturn(
+			aResponse()
+				.withStatus(500)
+				.withStatusMessage("The bees! They're in my eyes!")));
+
+		assertThat(testClient.get("/status-message").statusMessage(), is("The bees! They're in my eyes!"));
+	}
+
+	@Test
+	public void doesNotAttemptToMatchXmlBodyWhenStubMappingDoesNotHaveOne() {
+        stubFor(options(urlEqualTo("/no-body")).willReturn(aResponse().withStatus(200)));
+        stubFor(post(urlEqualTo("/no-body"))
+            .withRequestBody(equalToXml("<some-xml />"))
+            .willReturn(aResponse().withStatus(201)));
+
+        WireMockResponse response = testClient.request("OPTIONS", "/no-body");
+        assertThat(response.statusCode(), is(200));
+    }
+
+    @Test
+    public void matchesQueryParamsUnencoded() {
+        stubFor(get(urlPathEqualTo("/query"))
+            .withQueryParam("param-one", equalTo("one two three ?"))
+            .willReturn(aResponse().withStatus(200)));
+
+        WireMockResponse response = testClient.get("/query?param-one=one%20two%20three%20%3F");
+        assertThat(response.statusCode(), is(200));
+    }
+
+	@Test
+    public void copesWithEmptyRequestHeaderValueWhenMatchingOnEqualTo() {
+        stubFor(get(urlPathEqualTo("/empty-header"))
+            .withHeader("X-My-Header", equalTo(""))
+            .willReturn(aResponse().withStatus(200)));
+
+        WireMockResponse response = testClient.get("/empty-header", withHeader("X-My-Header", ""));
+
+        assertThat(response.statusCode(), is(200));
+    }
 
 	private void getAndAssertUnderlyingExceptionInstanceClass(String url, Class<?> expectedClass) {
 		boolean thrown = false;
